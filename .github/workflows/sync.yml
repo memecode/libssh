@@ -28,9 +28,8 @@ jobs:
           # 2. Extract updates and modern version tags directly from GitLab
           git fetch upstream --tags
           
-          # 3. Synchronize the default branch (master from GitLab to main on GitHub)
-          # Note: If your GitHub repo defaults to 'master', change 'main' to 'master' below
-          git checkout main || git checkout -b master
+          # 3. Synchronize the default branch (master from GitLab to master on GitHub)
+          git checkout master || git checkout -b master
           git merge upstream/master --allow-unrelated-histories -m "Automated sync from GitLab upstream"
           
           # 4. Upload all synchronized changes and tags back to your GitHub repository
