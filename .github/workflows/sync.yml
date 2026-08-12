@@ -1,0 +1,37 @@
+name: Sync Mirror from GitLab
+
+on:
+  schedule:
+    # Runs automatically every day at midnight UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch: # This adds your manual "Sync" button to the UI
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout local repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetches all historical data and existing tags
+
+      - name: Configure Git Identity
+        run: |
+          git config --global user.name "Matthew Allen"
+          git config --global user.email "fret@memecode.com"
+
+      - name: Fetch and Push from GitLab
+        run: |
+          # 1. Map the GitLab repository as an upstream point
+          git remote add upstream https://gitlab.com/libssh/libssh-mirror.git
+          
+          # 2. Extract updates and modern version tags directly from GitLab
+          git fetch upstream --tags
+          
+          # 3. Synchronize the default branch (master from GitLab to main on GitHub)
+          # Note: If your GitHub repo defaults to 'master', change 'main' to 'master' below
+          git checkout main || git checkout -b master
+          git merge upstream/master --allow-unrelated-histories -m "Automated sync from GitLab upstream"
+          
+          # 4. Upload all synchronized changes and tags back to your GitHub repository
+          git push origin master --tags
