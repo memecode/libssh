@@ -44,7 +44,7 @@ char *ssh_config_get_cmd(char **str)
 
     /* Ignore leading spaces */
     for (c = *str; *c; c++) {
-        if (!isblank((unsigned char)*c)) {
+        if (!isspace((unsigned char)*c)) {
             break;
         }
     }
@@ -77,6 +77,7 @@ char *ssh_config_get_token_info(char **str, struct ssh_config_token_info *info)
     bool found = false;
     bool invalid = false;
     char *r = NULL;
+    char inquote = '\0';
 
     if (info != NULL) {
         info->found = false;
@@ -86,7 +87,7 @@ char *ssh_config_get_token_info(char **str, struct ssh_config_token_info *info)
 
     /* Ignore leading spaces */
     for (c = *str; *c; c++) {
-        if (! isblank(*c)) {
+        if (!isspace((unsigned char)*c)) {
             break;
         }
     }
@@ -108,60 +109,48 @@ char *ssh_config_get_token_info(char **str, struct ssh_config_token_info *info)
 
     found = true;
 
-    /* If we start with quote, return the whole quoted block */
-    if (*c == '\"') {
-        bool closed_quote = false;
-
-        r = dst = ++c;
-        while (*c != '\0' && *c != '\n') {
-            if (*c == '\\' && c[1] == '\"') {
-                c++;
-            } else if (*c == '\"') {
-                *dst = '\0';
-                c++;
-                closed_quote = true;
-                break;
-            }
-            *dst++ = *c++;
-        }
-        if (!closed_quote) {
-            invalid = true;
+    /* Terminate on space, equal or newline.
+     * Embedded quotes are stripped and used to protect spaces from being
+     * seen as delimiters.
+     */
+    r = dst = c;
+    for (; *c; c++) {
+        /* Process backslash escapes matching OpenSSH's argv_split():
+         * \\, \', \", and \<blank> are recognized. The backslash is
+         * dropped and the escaped character is kept. Unrecognized
+         * escapes preserve the backslash literally.
+         */
+        if (*c == '\\' &&
+            (c[1] == '\\' || c[1] == '\'' || c[1] == '\"' ||
+             isspace((unsigned char)c[1]))) {
+            c++;
+            *dst++ = *c;
+        } else if (*c == '\n' || (!inquote && (isspace((unsigned char)*c) || *c == '='))) {
+            had_equal = (*c == '=');
             *dst = '\0';
-            if (*c == '\n') {
-                c++;
-            }
-        }
-    } else {
-        /* Otherwise terminate on space, equal or newline */
-        r = dst = c;
-        for (; *c; c++) {
-            /* Treat escaped whitespace outside quotes as part of the current
-             * token, e.g. "tag\ name". The backslash is dropped as the token
-             * is compacted in place through dst.
-             *
-             * Note: there is no general backslash escape; the quoted branch
-             * above only recognizes \", and this branch only recognizes
-             * \<blank>.
-             */
-            if (*c == '\\' && isblank((unsigned char)c[1])) {
-                c++;
-                *dst++ = *c;
-            } else if (isblank((unsigned char)*c) || *c == '=' || *c == '\n') {
-                had_equal = (*c == '=');
-                *dst = '\0';
-                c++;
-                break;
+            c++;
+            break;
+        } else if (inquote) {
+            if (*c == inquote) {
+                inquote = '\0';
             } else {
                 *dst++ = *c;
             }
+        } else if (*c == '\'' || *c == '\"') {
+            inquote = *c;
+        } else {
+            *dst++ = *c;
         }
-        if (*c == '\0') {
-            *dst = '\0';
-        }
+    }
+    if (inquote) {
+        invalid = true;
+    }
+    if (*c == '\0') {
+        *dst = '\0';
     }
 
     /* Skip any other remaining whitespace */
-    while (isblank((unsigned char)*c) || *c == '\n' ||
+    while (isspace((unsigned char)*c) || *c == '\n' ||
            (!had_equal && *c == '=')) {
         if (*c == '=') {
             had_equal = true;
@@ -380,4 +369,93 @@ error:
         SAFE_FREE(*port);
     }
     return SSH_ERROR;
+}
+
+/**
+ * @brief Get a path from a string, handling quotes and spaces.
+ *
+ * It handles single and double quotes and strips them from the result.
+ * It also handles escaped characters (\\).
+ * It preserves comment boundaries (#) unless inside quotes.
+ *
+ * @param[in,out] str Pointer to the string to parse. Updated to point
+ *                    to the next token.
+ *
+ * @return  A pointer to the extracted path string, or NULL on error
+ *          (e.g. unclosed quotes) or if no path is found.
+ */
+char *ssh_config_get_path(char **str)
+{
+    char *c = *str;
+    char *r = NULL;
+    char *out = NULL;
+    char delimiter;
+    bool in_double_quote = false;
+    bool in_single_quote = false;
+
+    /* Skip leading spaces */
+    while (isblank((unsigned char)*c)) {
+        c++;
+    }
+
+    if (*c == '\0' || *c == '\n' || *c == '#') {
+        *str = c;
+        return NULL;
+    }
+
+    r = out = c;
+
+    for (; *c != '\0' && *c != '\n'; c++) {
+        bool in_quotes = in_single_quote || in_double_quote;
+
+        if (*c == '\\') {
+            /* If we encounter an escape character, check if it's escaping something meaningful */
+            if (c[1] == '\'' || c[1] == '\"' || c[1] == '\\' ||
+                (!in_quotes && isblank((unsigned char)c[1]))) {
+                c++; /* Skip the escape character */
+            }
+        } else if ((in_single_quote && *c == '\'') || (in_double_quote && *c == '\"')) {
+            /* Closing quote */
+            in_single_quote = false;
+            in_double_quote = false;
+            continue;
+        } else if (!in_quotes) {
+            /* We are outside of quotes - handle opening quotes and token boundaries */
+            if (isblank((unsigned char)*c)) {
+                break; /* Space means we've reached the end of the token */
+            } else if (*c == '\'' || *c == '\"') {
+                if (*c == '\'') {
+                    in_single_quote = true;
+                } else {
+                    in_double_quote = true;
+                }
+                continue; /* Skip the opening quote character itself */
+            }
+        }
+
+        /* Everything else (regular characters, and literal characters inside quotes) 
+         * gets appended to the token */
+        *out++ = *c;
+    }
+
+    /* Return NULL on unclosed quotes */
+    if (in_double_quote || in_single_quote) {
+        return NULL;
+    }
+
+    delimiter = *c;
+    *out = '\0';
+
+    /* Move past the delimiter for the next time this is called */
+    if (delimiter != '\0' && delimiter != '\n' && delimiter != '#') {
+        c++;
+    }
+
+    /* Skip any trailing whitespace as well */
+    while (isblank((unsigned char)*c)) {
+        c++;
+    }
+
+    *str = c;
+    return r;
 }

@@ -52,11 +52,6 @@
 #include "libssh/session.h"
 #include "libssh/misc.h"
 #include "libssh/options.h"
-
-#ifndef MAX_LINE_SIZE
-#define MAX_LINE_SIZE 1024
-#endif
-
 struct ssh_config_keyword_table_s {
   const char *name;
   enum ssh_config_opcode_e opcode;
@@ -104,7 +99,7 @@ static struct ssh_config_keyword_table_s ssh_config_keyword_table[] = {
     {"connectionattempts", SOC_UNSUPPORTED, true},
     {"enablesshkeysign", SOC_UNSUPPORTED, true},
     {"fingerprinthash", SOC_UNSUPPORTED, true},
-    {"forwardagent", SOC_UNSUPPORTED, true},
+    {"forwardagent", SOC_FORWARD_AGENT, true},
     {"hashknownhosts", SOC_UNSUPPORTED, true},
     {"hostbasedauthentication", SOC_UNSUPPORTED, true},
     {"hostbasedacceptedalgorithms", SOC_UNSUPPORTED, true},
@@ -537,22 +532,17 @@ ssh_match_exec(ssh_session session, const char *command, bool negate)
 #endif /* WITH_EXEC */
 
 /*
- * HostName recognizes %% and %h during config parsing. Other %X sequences are
- * left for deferred HostName expansion, and only a trailing bare '%' is
- * rejected here.
+ * HostName recognizes %% and %h during config parsing. Unsupported %X
+ * sequences are strictly rejected as fatal errors here, matching OpenSSH.
  */
 static int ssh_config_scan_hostname_tokens(ssh_session session,
                                            const char *hostname,
-                                           bool *needs_host,
-                                           bool *has_unknown)
+                                           bool *needs_host)
 {
     const char *p = NULL;
 
     if (needs_host != NULL) {
         *needs_host = false;
-    }
-    if (has_unknown != NULL) {
-        *has_unknown = false;
     }
 
     if (hostname == NULL) {
@@ -579,46 +569,13 @@ static int ssh_config_scan_hostname_tokens(ssh_session session,
                 p++;
                 continue;
             default:
-                if (has_unknown != NULL) {
-                    *has_unknown = true;
-                }
-                p++;
-                continue;
+                ssh_set_error(session, SSH_FATAL, "unknown key %%%c", p[1]);
+                return -1;
             }
         }
     }
 
     return 0;
-}
-
-static char *ssh_config_lowercase_hostname_pattern(const char *hostname)
-{
-    char *pattern = NULL;
-    char *p = NULL;
-    bool escape = false;
-
-    if (hostname == NULL) {
-        return NULL;
-    }
-
-    pattern = strdup(hostname);
-    if (pattern == NULL) {
-        return NULL;
-    }
-
-    for (p = pattern; *p != '\0'; p++) {
-        if (escape) {
-            escape = false;
-            continue;
-        }
-        if (*p == '%') {
-            escape = true;
-            continue;
-        }
-        *p = tolower((unsigned char)*p);
-    }
-
-    return pattern;
 }
 
 /**
@@ -1189,6 +1146,12 @@ static int ssh_config_parse_line_internal(ssh_session session,
   }
 
   keyword = ssh_config_get_token(&s);
+  /* OpenSSH treats an optional leading '=' exactly like whitespace before the keyword.
+   * Our tokenizer returns an empty string when it hits an '=', so we should skip exactly
+   * one empty token if there is still content on the line. */
+  if (keyword != NULL && *keyword == '\0' && s != NULL && *s != '\0' && *s != '\n') {
+      keyword = ssh_config_get_token(&s);
+  }
   if (keyword == NULL || *keyword == '#' ||
       *keyword == '\0' || *keyword == '\n') {
     SAFE_FREE(x);
@@ -1227,13 +1190,13 @@ static int ssh_config_parse_line_internal(ssh_session session,
 
   switch (opcode) {
     case SOC_INCLUDE: /* recursive include of other files */
-
       p = ssh_config_get_str_tok(&s, NULL);
       if (p && *parsing) {
         char *path = ssh_config_make_absolute(session, p, global);
         if (path == NULL) {
-          SSH_LOG(SSH_LOG_WARN, "line %d: Failed to allocate memory "
-                  "for the include path expansion", count);
+          SSH_LOG(SSH_LOG_WARN,
+                  "line %d: Failed to allocate memory for the include path expansion",
+                  count);
           SAFE_FREE(x);
           return -1;
         }
@@ -1584,19 +1547,16 @@ static int ssh_config_parse_line_internal(ssh_session session,
             int rc;
             bool had_expansion = strchr(p, '%') != NULL;
             bool needs_host = false;
-            bool has_unknown = false;
             rc = ssh_config_scan_hostname_tokens(session,
                                                  p,
-                                                 &needs_host,
-                                                 &has_unknown);
+                                                 &needs_host);
             if (rc < 0) {
                 SAFE_FREE(x);
                 return -1;
             }
             if (had_expansion) {
-                if (!has_unknown &&
-                    (!needs_host || session->opts.host != NULL ||
-                     session->opts.originalhost != NULL)) {
+                if (!needs_host || session->opts.host != NULL ||
+                     session->opts.originalhost != NULL) {
                     char *expanded = ssh_path_expand_hostname(session, p);
                     if (expanded == NULL) {
                         SAFE_FREE(x);
@@ -1614,8 +1574,7 @@ static int ssh_config_parse_line_internal(ssh_session session,
                         return -1;
                     }
                 } else {
-                    char *hostname_pattern =
-                        ssh_config_lowercase_hostname_pattern(p);
+                    char *hostname_pattern = strdup(p);
                     if (hostname_pattern == NULL) {
                         ssh_set_error_oom(session);
                         SAFE_FREE(x);
@@ -1625,16 +1584,9 @@ static int ssh_config_parse_line_internal(ssh_session session,
                     session->opts.config_hostname = hostname_pattern;
                 }
             } else {
-                char *lower = ssh_lowercase(p);
-                if (lower == NULL) {
-                    ssh_set_error_oom(session);
-                    SAFE_FREE(x);
-                    return -1;
-                }
                 session->opts.config_hostname_only = true;
-                ssh_options_set(session, SSH_OPTIONS_HOST, lower);
+                ssh_options_set(session, SSH_OPTIONS_HOST, p);
                 session->opts.config_hostname_only = false;
-                free(lower);
             }
         }
         break;
@@ -1654,9 +1606,23 @@ static int ssh_config_parse_line_internal(ssh_session session,
         }
         break;
     case SOC_IDENTITY:
-      p = ssh_config_get_str_tok(&s, NULL);
+      p = ssh_config_get_path(&s);
       CHECK_COND_OR_FAIL(p == NULL, "Missing argument");
       if (*parsing) {
+          /* OpenSSH does not use default identities if any explicit IdentityFile
+           * is provided in the configuration. Because libssh pre-populates its
+           * defaults early, we must clear them the first time we encounter an
+           * IdentityFile. We use seen[SOC_IDENTITY] as a flag to ensure we only
+           * clear the list once. */
+          if (!seen[SOC_IDENTITY]) {
+              struct ssh_iterator *it = NULL;
+              seen[SOC_IDENTITY] = 1;
+              while ((it = ssh_list_get_iterator(session->opts.identity_non_exp)) != NULL) {
+                  char *id = ssh_iterator_value(char *, it);
+                  ssh_list_remove(session->opts.identity_non_exp, it);
+                  free(id);
+              }
+          }
           ssh_options_set(session, SSH_OPTIONS_ADD_IDENTITY, p);
       }
       break;
@@ -1712,7 +1678,7 @@ static int ssh_config_parse_line_internal(ssh_session session,
       }
       break;
     case SOC_KNOWNHOSTS:
-      p = ssh_config_get_str_tok(&s, NULL);
+      p = ssh_config_get_path(&s);
       CHECK_COND_OR_FAIL(p == NULL, "Missing argument");
       if (*parsing) {
           ssh_options_set(session, SSH_OPTIONS_KNOWNHOSTS, p);
@@ -1770,7 +1736,7 @@ static int ssh_config_parse_line_internal(ssh_session session,
         }
         break;
     case SOC_GLOBALKNOWNHOSTSFILE:
-        p = ssh_config_get_str_tok(&s, NULL);
+        p = ssh_config_get_path(&s);
         CHECK_COND_OR_FAIL(p == NULL, "Missing argument");
         if (*parsing) {
             ssh_options_set(session, SSH_OPTIONS_GLOBAL_KNOWNHOSTS, p);
@@ -1835,38 +1801,54 @@ static int ssh_config_parse_line_internal(ssh_session session,
             ll = 0;
         } else {
             char *endp = NULL;
+            double divisor;
+            double val;
+
+            /* We parse decimals manually instead of using strtod() to match
+             * OpenSSH's strict behavior. This avoids locale issues (such as
+             * expecting commas instead of dots) and prevents the accidental
+             * parsing of exponential or scientific notation.
+             */
             ll = strtoll(p, &endp, 10);
             if (p == endp || ll < 0) {
                 CHECK_COND_OR_FAIL(1, "Invalid data limit");
                 break;
             }
+            
+            val = (double)ll;
+            if (*endp == '.') {
+                endp++;
+                divisor = 10.0;
+                while (isdigit((unsigned char)*endp)) {
+                    val += (*endp - '0') / divisor;
+                    divisor *= 10.0;
+                    endp++;
+                }
+            }
             switch (*endp) {
+            case 'e':
+            case 'E':
+                val *= 1024.0;
+                FALL_THROUGH;
+            case 'p':
+            case 'P':
+                val *= 1024.0;
+                FALL_THROUGH;
+            case 't':
+            case 'T':
+                val *= 1024.0;
+                FALL_THROUGH;
             case 'g':
             case 'G':
-                if (ll > LLONG_MAX / 1024) {
-                    SSH_LOG(SSH_LOG_TRACE, "Possible overflow of rekey limit");
-                    ll = -1;
-                    break;
-                }
-                ll = ll * 1024;
+                val *= 1024.0;
                 FALL_THROUGH;
             case 'm':
             case 'M':
-                if (ll > LLONG_MAX / 1024) {
-                    SSH_LOG(SSH_LOG_TRACE, "Possible overflow of rekey limit");
-                    ll = -1;
-                    break;
-                }
-                ll = ll * 1024;
+                val *= 1024.0;
                 FALL_THROUGH;
             case 'k':
             case 'K':
-                if (ll > LLONG_MAX / 1024) {
-                    SSH_LOG(SSH_LOG_TRACE, "Possible overflow of rekey limit");
-                    ll = -1;
-                    break;
-                }
-                ll = ll * 1024;
+                val *= 1024.0;
                 endp++;
                 FALL_THROUGH;
             case '\0':
@@ -1876,6 +1858,12 @@ static int ssh_config_parse_line_internal(ssh_session session,
                 /* Ignore invalid suffix and trailing garbage */
                 SSH_LOG(SSH_LOG_TRACE, "Ignoring invalid suffix");
                 break;
+            }
+            if (val > (double)LLONG_MAX) {
+                SSH_LOG(SSH_LOG_TRACE, "Possible overflow of rekey limit");
+                ll = -1;
+            } else {
+                ll = (long long)val;
             }
         }
         CHECK_COND_OR_FAIL(ll < 0, "Invalid data limit");
@@ -1984,7 +1972,7 @@ static int ssh_config_parse_line_internal(ssh_session session,
         CHECK_COND_OR_FAIL(1, "Unknown option");
         break;
     case SOC_IDENTITYAGENT:
-      p = ssh_config_get_str_tok(&s, NULL);
+      p = ssh_config_get_path(&s);
       CHECK_COND_OR_FAIL(p == NULL, "Missing argument");
       if (*parsing) {
           ssh_options_set(session, SSH_OPTIONS_IDENTITY_AGENT, p);
@@ -2109,6 +2097,28 @@ static int ssh_config_parse_line_internal(ssh_session session,
             ssh_options_set(session, SSH_OPTIONS_EXIT_ON_FORWARD_FAILURE, &b);
         }
         break;
+    case SOC_FORWARD_AGENT:
+        p = ssh_config_get_str_tok(&s, NULL);
+        CHECK_COND_OR_FAIL(p == NULL, "Missing argument");
+        if (*parsing) {
+            /* Accept a boolean, an explicit socket path, or a $VAR reference.
+             * A non-boolean value enables forwarding and sets the socket path.
+             * The value may be a literal path or an environment variable name
+             * (starting with '$'); a $VAR reference is kept verbatim here and
+             * is expanded only after login, at session time. */
+            if (strcasecmp(p, "yes") == 0 || strcasecmp(p, "true") == 0) {
+                bool b = true;
+                ssh_options_set(session, SSH_OPTIONS_FORWARD_AGENT, &b);
+            } else if (strcasecmp(p, "no") == 0 || strcasecmp(p, "false") == 0) {
+                bool b = false;
+                ssh_options_set(session, SSH_OPTIONS_FORWARD_AGENT, &b);
+            } else {
+                bool b = true;
+                ssh_options_set(session, SSH_OPTIONS_FORWARD_AGENT, &b);
+                ssh_options_set(session, SSH_OPTIONS_FORWARD_AGENT_SOCK_PATH, p);
+            }
+        }
+        break;
     case SOC_SEND_ENV:
         p = ssh_config_get_str_tok(&s, NULL);
         CHECK_COND_OR_FAIL(p == NULL, "Missing argument");
@@ -2154,7 +2164,7 @@ static int ssh_config_parse_line_internal(ssh_session session,
       }
       break;
     case SOC_CERTIFICATE:
-        p = ssh_config_get_str_tok(&s, NULL);
+        p = ssh_config_get_path(&s);
         CHECK_COND_OR_FAIL(p == NULL, "Missing argument");
         if (*parsing) {
             ssh_options_set(session, SSH_OPTIONS_CERTIFICATE, p);

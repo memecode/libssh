@@ -1311,6 +1311,7 @@ char *ssh_path_expand_tilde(const char *d)
     const char *p = NULL;
     size_t ld;
     size_t lh = 0;
+    int add_slash = 0;
 
     if (d[0] != '~') {
         return strdup(d);
@@ -1336,20 +1337,28 @@ char *ssh_path_expand_tilde(const char *d)
         if (pw == NULL) {
             return NULL;
         }
-        ld = strlen(p);
         h = strdup(pw->pw_dir);
 #endif
     } else {
-        ld = strlen(d);
         p = (char *) d;
         h = ssh_get_user_home_dir(NULL);
     }
+
     if (h == NULL) {
         return NULL;
     }
     lh = strlen(h);
 
-    r = malloc(ld + lh + 1);
+    /* Strip all leading slashes from the suffix path */
+    while (*p == '/') {
+        p++;
+    }
+    ld = strlen(p);
+
+    /* Does the home directory path end with a slash? */
+    add_slash = (lh > 0 && h[lh - 1] == '/') ? 0 : 1;
+
+    r = malloc(lh + add_slash + ld + 1);
     if (r == NULL) {
         SAFE_FREE(h);
         return NULL;
@@ -1359,7 +1368,11 @@ char *ssh_path_expand_tilde(const char *d)
         memcpy(r, h, lh);
     }
     SAFE_FREE(h);
-    memcpy(r + lh, p, ld + 1);
+
+    if (add_slash) {
+        r[lh] = '/';
+    }
+    memcpy(r + lh + add_slash, p, ld + 1);
 
     return r;
 }
@@ -1474,7 +1487,8 @@ err:
  */
 static char *ssh_path_expand_internal(ssh_session session,
                                       const char *s,
-                                      bool hostname_lenient)
+                                      bool hostname_lenient,
+                                      bool expand_tilde)
 {
     char *buf = NULL;
     char *r = NULL;
@@ -1482,7 +1496,11 @@ static char *ssh_path_expand_internal(ssh_session session,
     const char *p = NULL;
     size_t i, l;
 
-    r = ssh_path_expand_tilde(s);
+    if (expand_tilde) {
+        r = ssh_path_expand_tilde(s);
+    } else {
+        r = strdup(s);
+    }
     if (r == NULL) {
         ssh_set_error_oom(session);
         return NULL;
@@ -1506,7 +1524,7 @@ static char *ssh_path_expand_internal(ssh_session session,
 
     for (i = 0; *p != '\0'; p++) {
         if (*p != '%') {
-            buf[i] = hostname_lenient ? tolower((unsigned char)*p) : *p;
+            buf[i] = *p;
             i++;
             if (i >= MAX_BUF_SIZE) {
                 free(buf);
@@ -1581,11 +1599,9 @@ static char *ssh_path_expand_internal(ssh_session session,
             break;
         case 'h':
             if (session->opts.host) {
-                x = hostname_lenient ? ssh_lowercase(session->opts.host)
-                                     : strdup(session->opts.host);
+                x = strdup(session->opts.host);
             } else if (session->opts.originalhost) {
-                x = hostname_lenient ? ssh_lowercase(session->opts.originalhost)
-                                     : strdup(session->opts.originalhost);
+                x = strdup(session->opts.originalhost);
             } else {
                 ssh_set_error(session, SSH_FATAL, "Cannot expand host");
                 free(buf);
@@ -1697,7 +1713,12 @@ static char *ssh_path_expand_internal(ssh_session session,
  */
 char *ssh_path_expand_escape(ssh_session session, const char *s)
 {
-    return ssh_path_expand_internal(session, s, false);
+    return ssh_path_expand_internal(session, s, false, true);
+}
+
+char *ssh_string_expand_escape(ssh_session session, const char *s)
+{
+    return ssh_path_expand_internal(session, s, false, false);
 }
 
 /**
@@ -1715,7 +1736,7 @@ char *ssh_path_expand_escape(ssh_session session, const char *s)
  */
 char *ssh_path_expand_hostname(ssh_session session, const char *s)
 {
-    return ssh_path_expand_internal(session, s, true);
+    return ssh_path_expand_internal(session, s, true, false);
 }
 
 /**
@@ -2616,7 +2637,8 @@ int ssh_check_username_syntax(const char *username)
         return SSH_ERROR;
     }
     for (size_t i = 0; i < username_len; i++) {
-        if (isspace(username[i]) != 0 && username[i + 1] == '-') {
+        unsigned char c = (unsigned char)username[i];
+        if (iscntrl(c) != 0 || (isspace(c) != 0 && username[i + 1] == '-')) {
             return SSH_ERROR;
         }
     }

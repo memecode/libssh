@@ -117,6 +117,7 @@ enum ssh_pending_call_e {
 #define SSH_OPT_EXP_FLAG_PROXYCOMMAND 0x4
 #define SSH_OPT_EXP_FLAG_IDENTITY 0x8
 #define SSH_OPT_EXP_FLAG_CONTROL_PATH 0x10
+#define SSH_OPT_EXP_FLAG_USERNAME 0x20
 
 /* extensions flags */
 /* negotiation enabled */
@@ -308,6 +309,8 @@ struct ssh_session_struct {
         char *tag;                 /* configuration tag for Match tagged */
         int pubkey_auth;
         bool exit_on_forward_failure;
+        bool forward_agent;
+        char *forward_agent_sock_path;
     } opts;
 
     /* server options */

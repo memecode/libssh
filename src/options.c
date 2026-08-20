@@ -364,6 +364,14 @@ int ssh_options_copy(ssh_session src, ssh_session *dest)
         }
     }
 
+    if (src->opts.forward_agent_sock_path != NULL) {
+        new->opts.forward_agent_sock_path = strdup(src->opts.forward_agent_sock_path);
+        if (new->opts.forward_agent_sock_path == NULL) {
+            ssh_free(new);
+            return -1;
+        }
+    }
+
     if (src->opts.preferred_authentications != NULL) {
         new->opts.preferred_authentications = strdup(src->opts.preferred_authentications);
         if (new->opts.preferred_authentications == NULL) {
@@ -420,6 +428,7 @@ int ssh_options_copy(ssh_session src, ssh_session *dest)
     new->opts.exit_on_forward_failure = src->opts.exit_on_forward_failure;
     new->opts.server_alive_interval = src->opts.server_alive_interval;
     new->opts.server_alive_count_max = src->opts.server_alive_count_max;
+    new->opts.forward_agent         = src->opts.forward_agent;
     new->common.log_verbosity       = src->common.log_verbosity;
     new->common.callbacks           = src->common.callbacks;
 
@@ -593,6 +602,9 @@ static enum ssh_config_opcode_e ssh_opt_type_to_opcode(enum ssh_options_e type)
         return SOC_ESCAPE_CHAR;
     case SSH_OPTIONS_EXIT_ON_FORWARD_FAILURE:
         return SOC_EXIT_ON_FORWARD_FAILURE;
+    case SSH_OPTIONS_FORWARD_AGENT:
+    case SSH_OPTIONS_FORWARD_AGENT_SOCK_PATH:
+        return SOC_FORWARD_AGENT;
     /*
      * Accumulative options append to a list instead of replacing a value, so
      * the "first value wins" precedence between config and the application does
@@ -1103,6 +1115,28 @@ static enum ssh_config_opcode_e ssh_opt_type_to_opcode(enum ssh_options_e type)
  *                for the calling application to read; libssh does not
  *                automatically terminate the session based on this setting.
  *                (bool)
+ *              - SSH_OPTIONS_FORWARD_AGENT
+ *                If set to true, indicates that the local SSH agent
+ *                connection should be forwarded to the remote machine.
+ *                This value is parsed from the configuration file and stored
+ *                for the calling application to read; libssh does not
+ *                automatically request agent forwarding based on this
+ *                setting.
+ *                (bool)
+ *              - SSH_OPTIONS_FORWARD_AGENT_SOCK_PATH
+ *                Set the path to the local SSH agent socket to use for
+ *                agent forwarding. The value may be a literal socket path or
+ *                the name of an environment variable (starting with '$') that
+ *                holds the path. If unset, the SSH_AUTH_SOCK environment is
+ *                consulted. The socket path is only used when agent
+ *                forwarding is enabled; a "$VAR" reference is stored verbatim
+ *                at config-parse time and expanded only after login, at
+ *                session time.
+ *                This value is parsed from the configuration file and stored
+ *                for the calling application to read; libssh does not
+ *                automatically use this socket for agent forwarding based on
+ *                this setting.
+ *                (const char *)
  *              - SSH_OPTIONS_SEND_ENV
  *                Append one environment variable name pattern to the list of
  *                patterns to send to the server. Multiple calls accumulate
@@ -1188,6 +1222,14 @@ int ssh_options_set(ssh_session session,
             if (v == NULL || v[0] == '\0') {
                 ssh_set_error_invalid(session);
                 return -1;
+            } else if (session->opts.config_hostname_only) {
+                /* HostName values are plain hostnames, not user@host URIs */
+                SAFE_FREE(session->opts.host);
+                session->opts.host = strdup(value);
+                if (session->opts.host == NULL) {
+                    ssh_set_error_oom(session);
+                    return -1;
+                }
             } else {
                 char *username = NULL, *hostname = NULL;
                 char *strict_hostname = NULL;
@@ -1212,13 +1254,9 @@ int ssh_options_set(ssh_session session,
                     SAFE_FREE(session->opts.username);
                     session->opts.username = username;
                 }
-                if (!session->opts.config_hostname_only) {
-                    SAFE_FREE(session->opts.config_hostname);
-                    SAFE_FREE(session->opts.originalhost);
-                    session->opts.originalhost = hostname;
-                } else {
-                    SAFE_FREE(hostname);
-                }
+                SAFE_FREE(session->opts.config_hostname);
+                SAFE_FREE(session->opts.originalhost);
+                session->opts.originalhost = hostname;
 
                 /* Strict parse: set host only if valid hostname or IP */
                 rc = ssh_normalize_loose_ip(value, &normalized);
@@ -1240,11 +1278,6 @@ int ssh_options_set(ssh_session session,
                 if (rc != SSH_OK || strict_hostname == NULL) {
                     SAFE_FREE(session->opts.host);
                     SAFE_FREE(strict_hostname);
-                    if (session->opts.config_hostname_only) {
-                        /* Config path: Hostname must be valid */
-                        ssh_set_error_invalid(session);
-                        return -1;
-                    }
                 } else {
                     SAFE_FREE(session->opts.host);
                     session->opts.host = strict_hostname;
@@ -1367,7 +1400,9 @@ int ssh_options_set(ssh_session session,
             }
             break;
         case SSH_OPTIONS_IDENTITY:
-        case SSH_OPTIONS_ADD_IDENTITY:
+        case SSH_OPTIONS_ADD_IDENTITY: {
+            struct ssh_iterator *id_it = NULL;
+
             v = value;
             if (v == NULL || v[0] == '\0') {
                 ssh_set_error_invalid(session);
@@ -1377,7 +1412,15 @@ int ssh_options_set(ssh_session session,
             if (q == NULL) {
                 return -1;
             }
-
+            /* Deduplicate: skip if the same path is already in the list */
+            for (id_it = ssh_list_get_iterator(session->opts.identity_non_exp);
+                 id_it != NULL; id_it = id_it->next) {
+                int cmp = strcmp(ssh_iterator_value(char *, id_it), q);
+                if (cmp == 0) {
+                    free(q);
+                    return 0;
+                }
+            }
             if (session->opts.exp_flags & SSH_OPT_EXP_FLAG_IDENTITY) {
                 rc = ssh_list_append(session->opts.identity_non_exp, q);
             } else {
@@ -1388,7 +1431,10 @@ int ssh_options_set(ssh_session session,
                 return -1;
             }
             break;
-        case SSH_OPTIONS_CERTIFICATE:
+        }
+        case SSH_OPTIONS_CERTIFICATE: {
+            struct ssh_iterator *cert_it = NULL;
+
             v = value;
             if (v == NULL || v[0] == '\0') {
                 ssh_set_error_invalid(session);
@@ -1406,12 +1452,23 @@ int ssh_options_set(ssh_session session,
                     return -1;
                 }
             }
+
+            /* Deduplicate: skip if the same path is already in the list */
+            for (cert_it = ssh_list_get_iterator(session->opts.certificate_non_exp);
+                 cert_it != NULL; cert_it = cert_it->next) {
+                int cmp = strcmp(ssh_iterator_value(char *, cert_it), q);
+                if (cmp == 0) {
+                    free(q);
+                    return 0;
+                }
+            }
             rc = ssh_list_append(session->opts.certificate_non_exp, q);
             if (rc < 0) {
                 free(q);
                 return -1;
             }
             break;
+        }
         case SSH_OPTIONS_KNOWNHOSTS:
             v = value;
             SAFE_FREE(session->opts.knownhosts);
@@ -1914,7 +1971,7 @@ int ssh_options_set(ssh_session session,
                 return -1;
             } else {
                 uint32_t *x = (uint32_t *)value;
-                if ((*x * 1000) < *x) {
+                if (*x > UINT32_MAX / 1000) {
                     ssh_set_error(session, SSH_REQUEST_DENIED,
                                   "The provided value (%" PRIu32 ") for rekey"
                                   " time is too large", *x);
@@ -2239,6 +2296,30 @@ int ssh_options_set(ssh_session session,
                 session->opts.exit_on_forward_failure = *x;
             }
             break;
+        case SSH_OPTIONS_FORWARD_AGENT:
+            if (value == NULL) {
+                ssh_set_error_invalid(session);
+                return -1;
+            } else {
+                bool *x = (bool *)value;
+                session->opts.forward_agent = *x;
+            }
+            break;
+        case SSH_OPTIONS_FORWARD_AGENT_SOCK_PATH:
+            v = value;
+            SAFE_FREE(session->opts.forward_agent_sock_path);
+            if (v == NULL || v[0] == '\0') {
+                ssh_set_error_invalid(session);
+                return -1;
+            } else {
+                session->opts.forward_agent_sock_path =
+                    ssh_path_expand_tilde(v);
+                if (session->opts.forward_agent_sock_path == NULL) {
+                    ssh_set_error_oom(session);
+                    return -1;
+                }
+            }
+            break;
         default:
             ssh_set_error(session, SSH_REQUEST_DENIED, "Unknown ssh option %d", type);
             return -1;
@@ -2322,6 +2403,7 @@ char *ssh_options_get_algo(ssh_session session,
  *                  - SSH_OPTIONS_ESCAPE_CHAR
  *                  - SSH_OPTIONS_SERVER_ALIVE_INTERVAL
  *                  - SSH_OPTIONS_SERVER_ALIVE_COUNT_MAX
+ *                  - SSH_OPTIONS_FORWARD_AGENT
  *                  - SSH_OPTIONS_RSA_MIN_SIZE
  *                  - SSH_OPTIONS_PASSWORD_AUTH
  *                  - SSH_OPTIONS_PUBKEY_AUTH
@@ -2407,6 +2489,9 @@ int ssh_options_get_int(ssh_session session,
 #endif
     case SSH_OPTIONS_EXIT_ON_FORWARD_FAILURE:
         *value = session->opts.exit_on_forward_failure ? 1 : 0;
+        break;
+    case SSH_OPTIONS_FORWARD_AGENT:
+        *value = session->opts.forward_agent ? 1 : 0;
         break;
     default:
         ssh_set_error_invalid(session);
@@ -2515,6 +2600,10 @@ int ssh_options_get_port(ssh_session session, unsigned int* port_target) {
  *                \n
  *                Repeat calls to get all patterns. SSH_EOF is returned when
  *                the end of list is reached.
+ *
+ *              - SSH_OPTIONS_FORWARD_AGENT_SOCK_PATH:
+ *                Get the path to the local SSH agent socket used for agent
+ *                forwarding.
  *
  *              - SSH_OPTIONS_PROXYCOMMAND:
  *                Get the proxycommand necessary to log into the
@@ -2726,6 +2815,10 @@ int ssh_options_get(ssh_session session, enum ssh_options_e type, char** value)
             break;
         case SSH_OPTIONS_CONTROL_PATH:
             src = session->opts.control_path;
+            break;
+
+        case SSH_OPTIONS_FORWARD_AGENT_SOCK_PATH:
+            src = session->opts.forward_agent_sock_path;
             break;
 
         case SSH_OPTIONS_CIPHERS_C_S:
@@ -3057,11 +3150,32 @@ out:
     return r;
 }
 
-/** @internal
- * @brief Apply default values for unset session options.
+/**
+ * @internal
  *
- * Sets default SSH directory and username if not already configured,
- * and resolves any remaining option expansions.
+ * @brief Checks if a hostname requires lowercasing.
+ *
+ * This function determines if the given host string is a standard hostname
+ * that should be converted to lowercase for case-insensitive matching.
+ * It returns false for IPv4/IPv6 addresses or strings containing formatting
+ * tokens (e.g., '%'), as these should remain unmodified.
+ *
+ * @param[in]  host  The hostname string to evaluate.
+ *
+ * @return     true if the host should be lowercased, false otherwise.
+ */
+static bool ssh_host_requires_lowercase(const char *host) {
+    if (strchr(host, '%') != NULL || strchr(host, ':') != NULL ||
+        strspn(host, "0123456789.") == strlen(host)) {
+        return false;
+    }
+    return !ssh_is_ipaddr(host);
+}
+
+/**
+ * @internal
+ *
+ * @brief Apply session options defaults and resolve some configuration paths.
  *
  * @param[in] session  The SSH session to apply defaults to.
  *
@@ -3083,8 +3197,8 @@ int ssh_options_apply(ssh_session session)
             session->opts.host = normalized_host;
         } else {
             /* rc == 1: not a loose IP — lowercase if it's not a strict IP */
-            bool is_ip = ssh_is_ipaddr(session->opts.host);
-            if (!is_ip) {
+            bool requires_lowercase = ssh_host_requires_lowercase(session->opts.host);
+            if (requires_lowercase) {
                 char *lower = ssh_lowercase(session->opts.host);
                 if (lower != NULL) {
                     SAFE_FREE(session->opts.host);
@@ -3146,6 +3260,21 @@ int ssh_options_apply(ssh_session session)
         SAFE_FREE(saved_host);
         free(tmp);
         SAFE_FREE(session->opts.config_hostname);
+    }
+
+    /* Expand percent tokens in the username at apply time, matching OpenSSH
+     * which defers User expansion to after all options are resolved.
+     */
+    if ((session->opts.exp_flags & SSH_OPT_EXP_FLAG_USERNAME) == 0 &&
+        session->opts.username != NULL) {
+        tmp = ssh_string_expand_escape(session, session->opts.username);
+        if (tmp != NULL) {
+            free(session->opts.username);
+            session->opts.username = tmp;
+            tmp = NULL;
+        }
+        /* On failure, keep the raw string — best-effort expansion */
+        session->opts.exp_flags |= SSH_OPT_EXP_FLAG_USERNAME;
     }
 
     if ((session->opts.exp_flags & SSH_OPT_EXP_FLAG_KNOWNHOSTS) == 0) {
