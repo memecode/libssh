@@ -621,7 +621,6 @@ ssh_key pki_key_dup(const ssh_key key, int demote)
 
         rc = EVP_PKEY_assign_RSA(new->key, new_rsa);
         if (rc != 1) {
-            EVP_PKEY_free(new->key);
             RSA_free(new_rsa);
             goto fail;
         }
@@ -792,8 +791,9 @@ fail:
     return NULL;
 }
 
-int pki_key_generate_rsa(ssh_key key, int parameter){
-	int rc;
+int pki_key_generate_rsa(ssh_key key, int parameter)
+{
+    int rc;
 #if OPENSSL_VERSION_NUMBER < 0x30000000L
     BIGNUM *e = NULL;
     RSA *key_rsa = NULL;
@@ -832,7 +832,6 @@ int pki_key_generate_rsa(ssh_key key, int parameter){
     rc = EVP_PKEY_assign_RSA(key->key, key_rsa);
     if (rc != 1) {
         RSA_free(key_rsa);
-        EVP_PKEY_free(key->key);
         return SSH_ERROR;
     }
 
@@ -859,10 +858,11 @@ int pki_key_generate_rsa(ssh_key key, int parameter){
 
     EVP_PKEY_CTX_free(pctx);
 
-    if (rc != 1 || key->key == NULL)
+    if (rc != 1 || key->key == NULL) {
         return SSH_ERROR;
+    }
 #endif /* OPENSSL_VERSION_NUMBER */
-	return SSH_OK;
+    return SSH_OK;
 }
 
 #ifdef HAVE_OPENSSL_ECC
@@ -1174,7 +1174,7 @@ ssh_key pki_private_key_from_base64(const char *b64_key,
         ecdsa = EVP_PKEY_get0_EC_KEY(pkey);
         if (ecdsa == NULL) {
             SSH_LOG(SSH_LOG_TRACE,
-		    "Error parsing private key: %s",
+                    "Error parsing private key: %s",
                     ERR_error_string(ERR_get_error(), NULL));
             goto fail;
         }
@@ -1335,7 +1335,6 @@ int pki_privkey_build_rsa(ssh_key key,
     return SSH_OK;
 fail:
     RSA_free(key_rsa);
-    EVP_PKEY_free(key->key);
     return SSH_ERROR;
 #else
     rc = OSSL_PARAM_BLD_push_BN(param_bld, OSSL_PKEY_PARAM_RSA_N, bn);
@@ -1478,7 +1477,6 @@ fail:
     bignum_safe_free(bn);
     bignum_safe_free(be);
 #if OPENSSL_VERSION_NUMBER < 0x30000000L
-    EVP_PKEY_free(key->key);
     RSA_free(key_rsa);
 
     return SSH_ERROR;
