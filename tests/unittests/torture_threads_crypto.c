@@ -121,7 +121,7 @@ static void *thread_crypto_aes256_cbc(void *threadid)
     assert_non_null(cipher.set_encrypt_key);
     assert_non_null(cipher.encrypt);
 
-    /* This is for dump static analizyer without modelling support */
+    /* This is for dumb static analyzer without modelling support */
     if (cipher.set_encrypt_key == NULL ||
         cipher.encrypt == NULL) {
         return NULL;
@@ -149,9 +149,9 @@ static void *thread_crypto_aes256_cbc(void *threadid)
     assert_non_null(cipher.set_encrypt_key);
     assert_non_null(cipher.encrypt);
 
-    /* This is for dump static analizyer without modelling support */
-    if (cipher.set_encrypt_key == NULL ||
-        cipher.encrypt == NULL) {
+    /* This is for dumb static analyzer without modelling support */
+    if (cipher.set_decrypt_key == NULL ||
+        cipher.decrypt == NULL) {
         return NULL;
     }
 
