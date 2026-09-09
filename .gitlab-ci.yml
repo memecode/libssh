@@ -716,7 +716,7 @@ tumbleweed/static-analysis:
 ###############################################################################
 # That is a specific runner that we cannot enable universally.
 # We restrict it to builds under the $BUILD_IMAGES_PROJECT project.
-freebsd/openssl_1.1.1/x86_64:
+freebsd/openssl_3.0.x/x86_64:
   image:
   extends: .tests
   variables:

@@ -50,7 +50,7 @@ static ssh_string derive_curve25519_secret(ssh_session session)
     ssh_string secret = NULL;
     int rc;
 
-    secret = ssh_string_new(CURVE25519_PUBKEY_SIZE);
+    secret = ssh_string_new(CURVE25519_SECRET_SIZE);
     if (secret == NULL) {
         ssh_set_error_oom(session);
         return NULL;

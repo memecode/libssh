@@ -91,13 +91,13 @@ int ssh_curve25519_init(ssh_session session)
     return SSH_OK;
 }
 
-int curve25519_do_create_k(ssh_session session, ssh_curve25519_pubkey k)
+int curve25519_do_create_k(ssh_session session, ssh_curve25519_secret k)
 {
     ssh_curve25519_pubkey *peer_pubkey_loc = NULL;
     int rc, ret = SSH_ERROR;
     EVP_PKEY_CTX *pctx = NULL;
     EVP_PKEY *pkey = NULL, *pubkey = NULL;
-    size_t shared_key_len = CURVE25519_PUBKEY_SIZE;
+    size_t shared_key_len = CURVE25519_SECRET_SIZE;
 
     if (session->server) {
         peer_pubkey_loc = &session->next_crypto->curve25519_client_pubkey;

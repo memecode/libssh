@@ -138,7 +138,7 @@ void ssh_client_sntrup761x25519_remove_callbacks(ssh_session session)
 
 static int ssh_sntrup761x25519_build_k(ssh_session session)
 {
-    unsigned char ssk[SNTRUP761_SIZE + CURVE25519_PUBKEY_SIZE];
+    unsigned char ssk[SNTRUP761_SIZE + CURVE25519_SECRET_SIZE];
     unsigned char *k = ssk + SNTRUP761_SIZE;
     void *shared_secret_data = NULL;
     int rc;
@@ -149,7 +149,7 @@ static int ssh_sntrup761x25519_build_k(ssh_session session)
     }
 
 #ifdef DEBUG_CRYPTO
-    ssh_log_hexdump("Curve25519 shared secret", k, CURVE25519_PUBKEY_SIZE);
+    ssh_log_hexdump("Curve25519 shared secret", k, CURVE25519_SECRET_SIZE);
 #endif
 
 #ifdef HAVE_LIBGCRYPT

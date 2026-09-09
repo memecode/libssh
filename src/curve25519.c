@@ -48,7 +48,7 @@ static struct ssh_packet_callbacks_struct ssh_curve25519_client_callbacks = {
     .user = NULL,
 };
 
-int ssh_curve25519_create_k(ssh_session session, ssh_curve25519_pubkey k)
+int ssh_curve25519_create_k(ssh_session session, ssh_curve25519_secret k)
 {
     int rc;
 
@@ -103,7 +103,7 @@ void ssh_client_curve25519_remove_callbacks(ssh_session session)
 
 int ssh_curve25519_build_k(ssh_session session)
 {
-    ssh_curve25519_pubkey k;
+    ssh_curve25519_secret k;
     int rc;
 
     rc = ssh_curve25519_create_k(session, k);
@@ -112,8 +112,9 @@ int ssh_curve25519_build_k(ssh_session session)
     }
 
     bignum_bin2bn(k,
-                  CURVE25519_PUBKEY_SIZE,
+                  CURVE25519_SECRET_SIZE,
                   &session->next_crypto->shared_secret);
+    ssh_burn(k, sizeof(ssh_curve25519_secret));
     if (session->next_crypto->shared_secret == NULL) {
         return SSH_ERROR;
     }

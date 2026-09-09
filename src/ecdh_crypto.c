@@ -287,195 +287,192 @@ int ssh_client_ecdh_init(ssh_session session)
 
 int ecdh_build_k(ssh_session session)
 {
-  struct ssh_crypto_struct *next_crypto = session->next_crypto;
+    struct ssh_crypto_struct *next_crypto = session->next_crypto;
+    ssh_string peer_pubkey = NULL;
+    void *secret = NULL;
+    size_t secret_len;
+    int rc;
 #if OPENSSL_VERSION_NUMBER < 0x30000000L
-  const EC_GROUP *group = EC_KEY_get0_group(next_crypto->ecdh_privkey);
-  EC_POINT *pubkey = NULL;
-  void *buffer = NULL;
-  int rc;
-  int len = (EC_GROUP_get_degree(group) + 7) / 8;
-  bignum_CTX ctx = bignum_ctx_new();
-  if (ctx == NULL) {
-    return -1;
-  }
-  pubkey = EC_POINT_new(group);
-  if (pubkey == NULL) {
+    const EC_GROUP *group = NULL;
+    EC_POINT *pubkey = NULL;
+    bignum_CTX ctx = NULL;
+#else
+    const char *curve = NULL;
+    EVP_PKEY *pubkey = NULL;
+    OSSL_PARAM_BLD *param_bld = NULL;
+    EVP_PKEY_CTX *dh_ctx = NULL;
+#endif /* OPENSSL_VERSION_NUMBER */
+
+    if (session->server) {
+        peer_pubkey = next_crypto->ecdh_client_pubkey;
+    } else {
+        peer_pubkey = next_crypto->ecdh_server_pubkey;
+    }
+
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+    group = EC_KEY_get0_group(next_crypto->ecdh_privkey);
+
+    ctx = bignum_ctx_new();
+    if (ctx == NULL) {
+        return -1;
+    }
+
+    secret_len = (EC_GROUP_get_degree(group) + 7) / 8;
+    pubkey = EC_POINT_new(group);
+    if (pubkey == NULL) {
+        bignum_ctx_free(ctx);
+        return -1;
+    }
+
+    rc = EC_POINT_oct2point(group,
+                            pubkey,
+                            ssh_string_data(peer_pubkey),
+                            ssh_string_len(peer_pubkey),
+                            ctx);
     bignum_ctx_free(ctx);
-    return -1;
-  }
+    if (rc <= 0) {
+        EC_POINT_clear_free(pubkey);
+        return -1;
+    }
 
-  if (session->server) {
-      rc = EC_POINT_oct2point(group,
-                              pubkey,
-                              ssh_string_data(next_crypto->ecdh_client_pubkey),
-                              ssh_string_len(next_crypto->ecdh_client_pubkey),
-                              ctx);
-  } else {
-      rc = EC_POINT_oct2point(group,
-                              pubkey,
-                              ssh_string_data(next_crypto->ecdh_server_pubkey),
-                              ssh_string_len(next_crypto->ecdh_server_pubkey),
-                              ctx);
-  }
-  bignum_ctx_free(ctx);
-  if (rc <= 0) {
-      EC_POINT_clear_free(pubkey);
-      return -1;
-  }
+    secret = malloc(secret_len);
+    if (secret == NULL) {
+        EC_POINT_clear_free(pubkey);
+        return -1;
+    }
 
-  buffer = malloc(len);
-  if (buffer == NULL) {
-      EC_POINT_clear_free(pubkey);
-      return -1;
-  }
-
-  rc = ECDH_compute_key(buffer,
-                        len,
-                        pubkey,
-                        next_crypto->ecdh_privkey,
-                        NULL);
-  EC_POINT_clear_free(pubkey);
-  if (rc <= 0) {
-      free(buffer);
-      return -1;
-  }
-
-  bignum_bin2bn(buffer, len, &next_crypto->shared_secret);
-  free(buffer);
+    rc = ECDH_compute_key(secret,
+                          secret_len,
+                          pubkey,
+                          next_crypto->ecdh_privkey,
+                          NULL);
+    EC_POINT_clear_free(pubkey);
+    if (rc <= 0) {
+        BURN_FREE(secret, secret_len);
+        return -1;
+    }
 #else
-  const char *curve = NULL;
-  EVP_PKEY *pubkey = NULL;
-  void *secret = NULL;
-  size_t secret_len;
-  int rc;
-  ssh_string peer_pubkey = NULL;
-  OSSL_PARAM_BLD *param_bld = OSSL_PARAM_BLD_new();
-  EVP_PKEY_CTX *dh_ctx = EVP_PKEY_CTX_new_from_pkey(NULL,
-                                                    next_crypto->ecdh_privkey,
-                                                    NULL);
+    param_bld = OSSL_PARAM_BLD_new();
+    dh_ctx = EVP_PKEY_CTX_new_from_pkey(NULL, next_crypto->ecdh_privkey, NULL);
 
-  if (dh_ctx == NULL || param_bld == NULL) {
-      ssh_set_error_oom(session);
-      EVP_PKEY_CTX_free(dh_ctx);
-      OSSL_PARAM_BLD_free(param_bld);
-      return -1;
-  }
+    if (dh_ctx == NULL || param_bld == NULL) {
+        ssh_set_error_oom(session);
+        EVP_PKEY_CTX_free(dh_ctx);
+        OSSL_PARAM_BLD_free(param_bld);
+        return -1;
+    }
 
-  rc = EVP_PKEY_derive_init(dh_ctx);
-  if (rc != 1) {
-      ssh_set_error(session,
-                    SSH_FATAL,
-                    "Could not init PKEY derive: %s",
-                    ERR_error_string(ERR_get_error(), NULL));
-      EVP_PKEY_CTX_free(dh_ctx);
-      OSSL_PARAM_BLD_free(param_bld);
-      return -1;
-  }
+    rc = EVP_PKEY_derive_init(dh_ctx);
+    if (rc != 1) {
+        ssh_set_error(session,
+                      SSH_FATAL,
+                      "Could not init PKEY derive: %s",
+                      ERR_error_string(ERR_get_error(), NULL));
+        EVP_PKEY_CTX_free(dh_ctx);
+        OSSL_PARAM_BLD_free(param_bld);
+        return -1;
+    }
 
-  if (session->server) {
-      peer_pubkey = next_crypto->ecdh_client_pubkey;
-  } else {
-      peer_pubkey = next_crypto->ecdh_server_pubkey;
-  }
-  rc = OSSL_PARAM_BLD_push_octet_string(param_bld,
-                                        OSSL_PKEY_PARAM_PUB_KEY,
-                                        ssh_string_data(peer_pubkey),
-                                        ssh_string_len(peer_pubkey));
-  if (rc != 1) {
-      ssh_set_error(session,
-                    SSH_FATAL,
-                    "Could not push the pub key: %s",
-                    ERR_error_string(ERR_get_error(), NULL));
-      EVP_PKEY_CTX_free(dh_ctx);
-      OSSL_PARAM_BLD_free(param_bld);
-      return -1;
-  }
-  curve = ecdh_kex_type_to_curve(next_crypto->kex_type);
-  rc = OSSL_PARAM_BLD_push_utf8_string(param_bld,
-                                       OSSL_PKEY_PARAM_GROUP_NAME,
-                                       (char *)curve,
-                                       strlen(curve));
-  if (rc != 1) {
-      ssh_set_error(session,
-                    SSH_FATAL,
-                    "Could not push the group name: %s",
-                    ERR_error_string(ERR_get_error(), NULL));
-      EVP_PKEY_CTX_free(dh_ctx);
-      OSSL_PARAM_BLD_free(param_bld);
-      return -1;
-  }
+    rc = OSSL_PARAM_BLD_push_octet_string(param_bld,
+                                          OSSL_PKEY_PARAM_PUB_KEY,
+                                          ssh_string_data(peer_pubkey),
+                                          ssh_string_len(peer_pubkey));
+    if (rc != 1) {
+        ssh_set_error(session,
+                      SSH_FATAL,
+                      "Could not push the pub key: %s",
+                      ERR_error_string(ERR_get_error(), NULL));
+        EVP_PKEY_CTX_free(dh_ctx);
+        OSSL_PARAM_BLD_free(param_bld);
+        return -1;
+    }
+    curve = ecdh_kex_type_to_curve(next_crypto->kex_type);
+    rc = OSSL_PARAM_BLD_push_utf8_string(param_bld,
+                                         OSSL_PKEY_PARAM_GROUP_NAME,
+                                         (char *)curve,
+                                         strlen(curve));
+    if (rc != 1) {
+        ssh_set_error(session,
+                      SSH_FATAL,
+                      "Could not push the group name: %s",
+                      ERR_error_string(ERR_get_error(), NULL));
+        EVP_PKEY_CTX_free(dh_ctx);
+        OSSL_PARAM_BLD_free(param_bld);
+        return -1;
+    }
 
-  rc = evp_build_pkey("EC", param_bld, &pubkey, EVP_PKEY_PUBLIC_KEY);
-  OSSL_PARAM_BLD_free(param_bld);
-  if (rc != SSH_OK) {
-      ssh_set_error(session,
-                    SSH_FATAL,
-                    "Could not build the pkey: %s",
-                    ERR_error_string(ERR_get_error(), NULL));
-      EVP_PKEY_CTX_free(dh_ctx);
-      return -1;
-  }
+    rc = evp_build_pkey("EC", param_bld, &pubkey, EVP_PKEY_PUBLIC_KEY);
+    OSSL_PARAM_BLD_free(param_bld);
+    if (rc != SSH_OK) {
+        ssh_set_error(session,
+                      SSH_FATAL,
+                      "Could not build the pkey: %s",
+                      ERR_error_string(ERR_get_error(), NULL));
+        EVP_PKEY_CTX_free(dh_ctx);
+        return -1;
+    }
 
-  rc = EVP_PKEY_derive_set_peer(dh_ctx, pubkey);
-  EVP_PKEY_free(pubkey);
-  if (rc != 1) {
-      ssh_set_error(session,
-                    SSH_FATAL,
-                    "Could not set peer pubkey: %s",
-                    ERR_error_string(ERR_get_error(), NULL));
-      EVP_PKEY_CTX_free(dh_ctx);
-      return -1;
-  }
+    rc = EVP_PKEY_derive_set_peer(dh_ctx, pubkey);
+    EVP_PKEY_free(pubkey);
+    if (rc != 1) {
+        ssh_set_error(session,
+                      SSH_FATAL,
+                      "Could not set peer pubkey: %s",
+                      ERR_error_string(ERR_get_error(), NULL));
+        EVP_PKEY_CTX_free(dh_ctx);
+        return -1;
+    }
 
-  /* get the max length of the secret */
-  rc = EVP_PKEY_derive(dh_ctx, NULL, &secret_len);
-  if (rc != 1) {
-      ssh_set_error(session,
-                    SSH_FATAL,
-                    "Could not set peer pubkey: %s",
-                    ERR_error_string(ERR_get_error(), NULL));
-      EVP_PKEY_CTX_free(dh_ctx);
-      return -1;
-  }
+    /* get the max length of the secret */
+    rc = EVP_PKEY_derive(dh_ctx, NULL, &secret_len);
+    if (rc != 1) {
+        ssh_set_error(session,
+                      SSH_FATAL,
+                      "Could not set peer pubkey: %s",
+                      ERR_error_string(ERR_get_error(), NULL));
+        EVP_PKEY_CTX_free(dh_ctx);
+        return -1;
+    }
 
-  secret = malloc(secret_len);
-  if (secret == NULL) {
-      ssh_set_error_oom(session);
-      EVP_PKEY_CTX_free(dh_ctx);
-      return -1;
-  }
+    secret = malloc(secret_len);
+    if (secret == NULL) {
+        ssh_set_error_oom(session);
+        EVP_PKEY_CTX_free(dh_ctx);
+        return -1;
+    }
 
-  rc = EVP_PKEY_derive(dh_ctx, secret, &secret_len);
-  if (rc != 1) {
-      ssh_set_error(session,
-                    SSH_FATAL,
-                    "Could not derive shared key: %s",
-                    ERR_error_string(ERR_get_error(), NULL));
-      EVP_PKEY_CTX_free(dh_ctx);
-      free(secret);
-      return -1;
-  }
+    rc = EVP_PKEY_derive(dh_ctx, secret, &secret_len);
+    if (rc != 1) {
+        ssh_set_error(session,
+                      SSH_FATAL,
+                      "Could not derive shared key: %s",
+                      ERR_error_string(ERR_get_error(), NULL));
+        EVP_PKEY_CTX_free(dh_ctx);
+        BURN_FREE(secret, secret_len);
+        return -1;
+    }
 
-  EVP_PKEY_CTX_free(dh_ctx);
-
-  bignum_bin2bn(secret, secret_len, &next_crypto->shared_secret);
-  free(secret);
+    EVP_PKEY_CTX_free(dh_ctx);
 #endif /* OPENSSL_VERSION_NUMBER */
-  if (next_crypto->shared_secret == NULL) {
+
+    bignum_bin2bn(secret, secret_len, &next_crypto->shared_secret);
+    BURN_FREE(secret, secret_len);
+
+    if (next_crypto->shared_secret == NULL) {
 #if OPENSSL_VERSION_NUMBER < 0x30000000L
-      EC_KEY_free(next_crypto->ecdh_privkey);
+        EC_KEY_free(next_crypto->ecdh_privkey);
 #else
-      EVP_PKEY_free(next_crypto->ecdh_privkey);
+        EVP_PKEY_free(next_crypto->ecdh_privkey);
 #endif /* OPENSSL_VERSION_NUMBER */
-      next_crypto->ecdh_privkey = NULL;
-      return -1;
-  }
+        next_crypto->ecdh_privkey = NULL;
+        return -1;
+    }
 #if OPENSSL_VERSION_NUMBER < 0x30000000L
-  EC_KEY_free(next_crypto->ecdh_privkey);
+    EC_KEY_free(next_crypto->ecdh_privkey);
 #else
-  EVP_PKEY_free(next_crypto->ecdh_privkey);
+    EVP_PKEY_free(next_crypto->ecdh_privkey);
 #endif /* OPENSSL_VERSION_NUMBER */
-  next_crypto->ecdh_privkey = NULL;
+    next_crypto->ecdh_privkey = NULL;
 
 #ifdef DEBUG_CRYPTO
     ssh_log_hexdump("Session server cookie",
@@ -485,7 +482,7 @@ int ecdh_build_k(ssh_session session)
     ssh_print_bignum("Shared secret key", next_crypto->shared_secret);
 #endif /* DEBUG_CRYPTO */
 
-  return 0;
+    return 0;
 }
 
 #ifdef WITH_SERVER

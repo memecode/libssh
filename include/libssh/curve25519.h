@@ -29,6 +29,7 @@
 #include <nacl/crypto_scalarmult_curve25519.h>
 #define CURVE25519_PUBKEY_SIZE crypto_scalarmult_curve25519_BYTES
 #define CURVE25519_PRIVKEY_SIZE crypto_scalarmult_curve25519_SCALARBYTES
+#define CURVE25519_SECRET_SIZE  CURVE25519_PUBKEY_SIZE
 #define crypto_scalarmult_base crypto_scalarmult_curve25519_base
 #define crypto_scalarmult crypto_scalarmult_curve25519
 #else
@@ -39,6 +40,7 @@ extern "C" {
 
 #define CURVE25519_PUBKEY_SIZE 32
 #define CURVE25519_PRIVKEY_SIZE 32
+#define CURVE25519_SECRET_SIZE  32
 int crypto_scalarmult_base(unsigned char *q, const unsigned char *n);
 int crypto_scalarmult(unsigned char *q, const unsigned char *n, const unsigned char *p);
 #endif /* WITH_NACL */
@@ -49,10 +51,11 @@ int crypto_scalarmult(unsigned char *q, const unsigned char *n, const unsigned c
 
 typedef unsigned char ssh_curve25519_pubkey[CURVE25519_PUBKEY_SIZE];
 typedef unsigned char ssh_curve25519_privkey[CURVE25519_PRIVKEY_SIZE];
+typedef unsigned char ssh_curve25519_secret[CURVE25519_SECRET_SIZE];
 
 int ssh_curve25519_init(ssh_session session);
-int curve25519_do_create_k(ssh_session session, ssh_curve25519_pubkey k);
-int ssh_curve25519_create_k(ssh_session session, ssh_curve25519_pubkey k);
+int curve25519_do_create_k(ssh_session session, ssh_curve25519_secret k);
+int ssh_curve25519_create_k(ssh_session session, ssh_curve25519_secret k);
 int ssh_curve25519_build_k(ssh_session session);
 
 int ssh_client_curve25519_init(ssh_session session);

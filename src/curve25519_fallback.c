@@ -56,7 +56,7 @@ int ssh_curve25519_init(ssh_session session)
     return SSH_OK;
 }
 
-int curve25519_do_create_k(ssh_session session, ssh_curve25519_pubkey k)
+int curve25519_do_create_k(ssh_session session, ssh_curve25519_secret k)
 {
     ssh_curve25519_pubkey *peer_pubkey_loc = NULL;
 
