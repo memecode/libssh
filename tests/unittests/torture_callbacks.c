@@ -77,9 +77,9 @@ static void test_mock_ssh_logging_callback(int priority,
 {
     struct test_mock_state *t = (struct test_mock_state *)userdata;
 
-    check_expected(priority);
-    check_expected(function);
-    check_expected(buffer);
+    check_expected_int(priority);
+    check_expected_ptr(function);
+    check_expected_ptr(buffer);
 
     t->executed++;
 }
@@ -96,7 +96,7 @@ static void torture_log_callback(void **state)
     ssh_set_log_userdata(&t);
     ssh_set_log_level(1);
 
-    expect_value(test_mock_ssh_logging_callback, priority, 1);
+    expect_int_value(test_mock_ssh_logging_callback, priority, 1);
     expect_string(test_mock_ssh_logging_callback, function, "torture_log_callback");
     expect_string(test_mock_ssh_logging_callback, buffer, "torture_log_callback: test");
 

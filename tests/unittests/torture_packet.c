@@ -131,9 +131,9 @@ torture_packet(const char *cipher, const char *mac_type,
     encrypted_packet_len = rc;
     cmp = strcmp(comp_type, "none");
     if (cmp == 0) {
-        assert_in_range(encrypted_packet_len,
-                        payload_len + 4,
-                        payload_len + (32 * 3));
+        assert_uint_in_range(encrypted_packet_len,
+                             payload_len + 4,
+                             payload_len + (32 * 3));
     }
     rc = send(sockets[0], buffer, encrypted_packet_len, 0);
     assert_int_equal(rc, encrypted_packet_len);

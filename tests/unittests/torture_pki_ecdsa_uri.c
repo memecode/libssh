@@ -132,7 +132,7 @@ static void torture_pki_ecdsa_import_pubkey_uri(void **state, const char *label)
     int rc;
 
     rc = snprintf(uri, sizeof(uri), PUB_URI_FMT, label, label);
-    assert_in_range(rc, 0, sizeof(uri) - 1);
+    assert_int_in_range(rc, 0, sizeof(uri) - 1);
 
     rc = ssh_pki_import_pubkey_file(uri, &pubkey);
     assert_return_code(rc, errno);
@@ -177,7 +177,7 @@ torture_pki_ecdsa_publickey_from_privatekey_uri(void **state,
     char pub_filename_pem[1024];
 
     rc = snprintf(uri, sizeof(uri), PRIV_URI_FMT, label, label);
-    assert_in_range(rc, 0, sizeof(uri) - 1);
+    assert_int_in_range(rc, 0, sizeof(uri) - 1);
 
     rc = ssh_pki_import_privkey_file(uri,
                                      NULL,
@@ -253,7 +253,7 @@ import_pubkey_without_loading_public_uri(void **state, const char *label)
     ssh_string pblob = NULL;
 
     rc = snprintf(uri, sizeof(uri), PRIV_URI_NO_PUB_FMT, label, label);
-    assert_in_range(rc, 0, sizeof(uri) - 1);
+    assert_int_in_range(rc, 0, sizeof(uri) - 1);
 
     rc = ssh_pki_import_privkey_file(uri,
                                      NULL,
@@ -306,7 +306,7 @@ torture_ecdsa_sign_verify_uri(void **state,
     assert_non_null(session);
 
     rc = snprintf(uri, sizeof(uri), PRIV_URI_FMT, label, label);
-    assert_in_range(rc, 0, sizeof(uri) - 1);
+    assert_int_in_range(rc, 0, sizeof(uri) - 1);
 
     rc = ssh_pki_import_privkey_file(uri,
                                      NULL,
@@ -386,9 +386,9 @@ static void torture_pki_ecdsa_duplicate_key_uri(void **state, const char *label)
     (void) state;
 
     rc = snprintf(pub_uri, sizeof(pub_uri), PUB_URI_FMT, label, label);
-    assert_in_range(rc, 0, sizeof(pub_uri) - 1);
+    assert_int_in_range(rc, 0, sizeof(pub_uri) - 1);
     rc = snprintf(priv_uri, sizeof(priv_uri), PRIV_URI_FMT, label, label);
-    assert_in_range(rc, 0, sizeof(priv_uri) - 1);
+    assert_int_in_range(rc, 0, sizeof(priv_uri) - 1);
 
     rc = ssh_pki_import_pubkey_file(pub_uri, &pubkey);
     assert_return_code(rc, errno);
@@ -460,7 +460,7 @@ torture_pki_ecdsa_duplicate_then_demote_uri(void **state, const char *label)
     (void) state;
 
     rc = snprintf(priv_uri, sizeof(priv_uri), PRIV_URI_FMT, label, label);
-    assert_in_range(rc, 0, sizeof(priv_uri) - 1);
+    assert_int_in_range(rc, 0, sizeof(priv_uri) - 1);
 
     rc = ssh_pki_import_privkey_file(priv_uri,
                                      NULL,

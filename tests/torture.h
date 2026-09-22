@@ -34,7 +34,7 @@
 #include "libssh/server.h"
 #include "libssh/sftp.h"
 
-#include <cmocka.h>
+#include "cmocka-compat.h"
 
 #include "tests_config.h"
 #include "torture_cmocka.h"

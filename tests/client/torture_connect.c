@@ -212,7 +212,7 @@ static void torture_connect_timeout(void **state) {
     /* Borrow a second for the missing usecs, but don't bother calculating */
     if (usec < 0)
       sec--;
-    assert_in_range(sec, 1, 3);
+    assert_int_in_range(sec, 1, 3);
 }
 #endif
 
