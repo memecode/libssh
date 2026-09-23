@@ -2055,7 +2055,7 @@ process_realpath(sftp_client_message client_msg)
 
         SSH_LOG_STRERROR(SSH_LOG_PROTOCOL, saved_errno, "realpath failed: %s");
         sftp_reply_status(client_msg, status, sftp_err_msg);
-        return SSH_ERROR;
+        return SSH_OK;
     }
     sftp_reply_name(client_msg, path, NULL);
     free(path);

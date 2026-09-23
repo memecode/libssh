@@ -869,6 +869,11 @@ static void torture_server_sftp_realpath(void **state)
     new_path = sftp_canonicalize_path(sftp, path);
     assert_null(new_path);
     ssh_string_free_char(new_path);
+
+    /* failed realpath above must not tear down the SFTP session */
+    new_path = sftp_canonicalize_path(sftp, tss->temp_dir);
+    assert_non_null(new_path);
+    ssh_string_free_char(new_path);
 }
 
 static void torture_server_sftp_symlink(void **state)
