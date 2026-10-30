@@ -75,6 +75,9 @@ extern LIBSSH_THREAD int ssh_log_level;
 #define LIBSSH_TESTCONFIG_MATCH_COMPLEX "libssh_test_match_complex.tmp"
 #define LIBSSH_TESTCONFIG_LOGLEVEL_MISSING "libssh_test_loglevel_missing.tmp"
 #define LIBSSH_TESTCONFIG_JUMP "libssh_test_jump.tmp"
+#define LIBSSH_TESTCONFIG_INCLUDE_HOST     "libssh_test_include_host.tmp"
+#define LIBSSH_TESTCONFIG_INCLUDE_HOST1    "libssh_test_include_host1.tmp"
+#define LIBSSH_TESTCONFIG_INCLUDE_HOST2    "libssh_test_include_host2.tmp"
 #define LIBSSH_TESTCONFIG_NUMERIC_INVALID  "libssh_test_numeric_invalid.tmp"
 #define LIBSSH_TESTCONFIG_TIMEOUT_SUFFIX   "libssh_test_timeout_suffix.tmp"
 #define LIBSSH_TESTCONFIG_BOOLEAN_INVALID  "libssh_test_boolean_invalid.tmp"
@@ -416,6 +419,22 @@ extern LIBSSH_THREAD int ssh_log_level;
     "    PasswordAuthentication yes\n" \
     "    LogLevel DEBUG3\n"
 
+/* The first included file ends inside a Host block for another host */
+#define LIBSSH_TESTCONFIG_INCLUDE_HOST_STRING       \
+    "Include " LIBSSH_TESTCONFIG_INCLUDE_HOST1 "\n" \
+    "Include " LIBSSH_TESTCONFIG_INCLUDE_HOST2 "\n" \
+    "User " USERNAME "\n"
+#define LIBSSH_TESTCONFIG_INCLUDE_HOST1_STRING \
+    "Host other.example\n"                     \
+    "    Port 1111\n"
+#define LIBSSH_TESTCONFIG_INCLUDE_HOST2_STRING \
+    "Host include.example\n"                   \
+    "    Port 2222\n"
+/* An Include inside a Host block for another host is not read */
+#define LIBSSH_TESTCONFIG_INCLUDE_IN_HOST_STRING \
+    "Host other.example\n"                       \
+    "    Include " LIBSSH_TESTCONFIG_INCLUDE_HOST2 "\n"
+
 #define LIBSSH_TESTCONFIG_IDENTITY_DEFAULT_ONLY \
    "IdentityFile ~/.ssh/id_rsa\n"
 
@@ -505,6 +524,9 @@ static int setup_config_files(void **state)
     unlink(LIBSSH_TESTCONFIG_MATCH_COMPLEX);
     unlink(LIBSSH_TESTCONFIG_LOGLEVEL_MISSING);
     unlink(LIBSSH_TESTCONFIG_JUMP);
+    unlink(LIBSSH_TESTCONFIG_INCLUDE_HOST);
+    unlink(LIBSSH_TESTCONFIG_INCLUDE_HOST1);
+    unlink(LIBSSH_TESTCONFIG_INCLUDE_HOST2);
     unlink(LIBSSH_TESTCONFIG_NUMERIC_INVALID);
     unlink(LIBSSH_TESTCONFIG_TIMEOUT_SUFFIX);
     unlink(LIBSSH_TESTCONFIG_BOOLEAN_INVALID);
@@ -622,6 +644,12 @@ static int setup_config_files(void **state)
                        LIBSSH_TESTCONFIG_LOGLEVEL_MISSING_STRING);
     torture_write_file(LIBSSH_TESTCONFIG_JUMP,
                        LIBSSH_TESTCONFIG_JUMP_STRING);
+    torture_write_file(LIBSSH_TESTCONFIG_INCLUDE_HOST,
+                       LIBSSH_TESTCONFIG_INCLUDE_HOST_STRING);
+    torture_write_file(LIBSSH_TESTCONFIG_INCLUDE_HOST1,
+                       LIBSSH_TESTCONFIG_INCLUDE_HOST1_STRING);
+    torture_write_file(LIBSSH_TESTCONFIG_INCLUDE_HOST2,
+                       LIBSSH_TESTCONFIG_INCLUDE_HOST2_STRING);
 
     /* PreferredAuthentications */
     torture_write_file(LIBSSH_TESTCONFIG20,
@@ -670,6 +698,9 @@ static int teardown_config_files(void **state)
     unlink(LIBSSH_TESTCONFIG_MATCH_COMPLEX);
     unlink(LIBSSH_TESTCONFIG_LOGLEVEL_MISSING);
     unlink(LIBSSH_TESTCONFIG_JUMP);
+    unlink(LIBSSH_TESTCONFIG_INCLUDE_HOST);
+    unlink(LIBSSH_TESTCONFIG_INCLUDE_HOST1);
+    unlink(LIBSSH_TESTCONFIG_INCLUDE_HOST2);
     unlink(LIBSSH_TESTCONFIG_NUMERIC_INVALID);
     unlink(LIBSSH_TESTCONFIG_TIMEOUT_SUFFIX);
     unlink(LIBSSH_TESTCONFIG_BOOLEAN_INVALID);
@@ -826,6 +857,79 @@ static void torture_config_include_recursive_file(void **state)
 static void torture_config_include_recursive_string(void **state)
 {
     _parse_config(*state, NULL, LIBSSH_TEST_RECURSIVE_INCLUDE_STRING, SSH_OK);
+}
+
+/**
+ * @brief tests that a Host block in an included file does not apply to the
+ * lines after the Include
+ */
+static void torture_config_include_host(void **state,
+                                        const char *file,
+                                        const char *string,
+                                        const char *host,
+                                        unsigned int port)
+{
+    ssh_session session = *state;
+    char *v = NULL;
+    int ret;
+
+    ssh_options_set(session, SSH_OPTIONS_HOST, host);
+    _parse_config(session, file, string, SSH_OK);
+
+    assert_int_equal(session->opts.port, port);
+
+    ret = ssh_options_get(session, SSH_OPTIONS_USER, &v);
+    assert_int_equal(ret, SSH_OK);
+    assert_string_equal(v, USERNAME);
+    SSH_STRING_FREE_CHAR(v);
+}
+
+static void torture_config_include_host_file(void **state)
+{
+    torture_config_include_host(state,
+                                LIBSSH_TESTCONFIG_INCLUDE_HOST,
+                                NULL,
+                                "include.example",
+                                2222);
+}
+
+static void torture_config_include_host_string(void **state)
+{
+    torture_config_include_host(state,
+                                NULL,
+                                LIBSSH_TESTCONFIG_INCLUDE_HOST_STRING,
+                                "include.example",
+                                2222);
+}
+
+/**
+ * @brief tests that the Host blocks of included files do not apply to a host
+ * that none of them matches
+ */
+static void torture_config_include_host_nomatch(void **state)
+{
+    torture_config_include_host(state,
+                                LIBSSH_TESTCONFIG_INCLUDE_HOST,
+                                NULL,
+                                "nomatch.example",
+                                22);
+}
+
+/**
+ * @brief tests that an Include inside a Host block for another host is not
+ * read
+ */
+static void torture_config_include_in_other_host(void **state)
+{
+    ssh_session session = *state;
+
+    ssh_options_set(session, SSH_OPTIONS_HOST, "include.example");
+    _parse_config(session,
+                  NULL,
+                  LIBSSH_TESTCONFIG_INCLUDE_IN_HOST_STRING,
+                  SSH_OK);
+
+    assert_int_equal(session->opts.port, 22);
 }
 
 /**
@@ -5663,6 +5767,18 @@ int torture_run_tests(void)
                                         setup,
                                         teardown),
         cmocka_unit_test_setup_teardown(torture_config_include_recursive_string,
+                                        setup,
+                                        teardown),
+        cmocka_unit_test_setup_teardown(torture_config_include_host_file,
+                                        setup,
+                                        teardown),
+        cmocka_unit_test_setup_teardown(torture_config_include_host_string,
+                                        setup,
+                                        teardown),
+        cmocka_unit_test_setup_teardown(torture_config_include_host_nomatch,
+                                        setup,
+                                        teardown),
+        cmocka_unit_test_setup_teardown(torture_config_include_in_other_host,
                                         setup,
                                         teardown),
         cmocka_unit_test_setup_teardown(torture_config_double_ports_file,
