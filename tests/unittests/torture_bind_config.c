@@ -165,6 +165,14 @@ extern LIBSSH_THREAD int ssh_log_level;
 #define LIBSSH_TEST_BIND_CONFIG_MATCH_CORNER_CASES "libssh_test_bind_config_match_corner_cases"
 #define LIBSSH_TEST_BIND_CONFIG_MATCH_INVALID "libssh_test_bind_config_match_invalid"
 #define LIBSSH_TEST_BIND_CONFIG_MATCH_INVALID2 "libssh_test_bind_config_match_invalid2"
+#define LIBSSH_TEST_BIND_CONFIG_MATCH_INCLUDED \
+    "libssh_test_bind_config_match_included"
+#define LIBSSH_TEST_BIND_CONFIG_MATCH_INCLUDED2 \
+    "libssh_test_bind_config_match_included2"
+#define LIBSSH_TEST_BIND_CONFIG_MATCH_ALL_INCLUDED \
+    "libssh_test_bind_config_match_all_included"
+#define LIBSSH_TEST_BIND_CONFIG_MATCH_ALL_INCLUDED2 \
+    "libssh_test_bind_config_match_all_included2"
 
 #define LIBSSH_TEST_BIND_CONFIG_PUBKEY_ACCEPTED "libssh_test_bind_config_pubkey"
 #define LIBSSH_TEST_BIND_CONFIG_PUBKEY_ACCEPTED_STRING "PubkeyAcceptedKeyTypes "PUBKEYACCEPTEDTYPES"\n"
@@ -404,6 +412,20 @@ static int setup_config_files(void **state)
                        "\tLogLevel "LOGLEVEL3"\n"
                        "Match All\n"
                        "\tLogLevel "LOGLEVEL4"\n");
+    /* The included file ends inside a Match block */
+    torture_write_file(LIBSSH_TEST_BIND_CONFIG_MATCH_INCLUDED,
+                       "Include " LIBSSH_TEST_BIND_CONFIG_MATCH_INCLUDED2 "\n"
+                       "Port 2222\n");
+    torture_write_file(LIBSSH_TEST_BIND_CONFIG_MATCH_INCLUDED2,
+                       "Match User alice\n"
+                       "\tLogLevel " LOGLEVEL2 "\n");
+    torture_write_file(LIBSSH_TEST_BIND_CONFIG_MATCH_ALL_INCLUDED,
+                       "Include " LIBSSH_TEST_BIND_CONFIG_MATCH_ALL_INCLUDED2
+                       "\n"
+                       "Port 2222\n");
+    torture_write_file(LIBSSH_TEST_BIND_CONFIG_MATCH_ALL_INCLUDED2,
+                       "Match All\n"
+                       "\tLogLevel " LOGLEVEL2 "\n");
 
     torture_write_file(LIBSSH_TEST_BIND_CONFIG_PUBKEY_ACCEPTED,
                        LIBSSH_TEST_BIND_CONFIG_PUBKEY_ACCEPTED_STRING);
@@ -1672,6 +1694,60 @@ static void torture_bind_config_match_unsupported(void **state)
     assert_int_equal(rc, SSH_OK);
 }
 
+/**
+ * @brief tests that a Match block in an included file does not apply to the
+ * lines after the Include
+ */
+static void torture_bind_config_match_included(void **state)
+{
+    struct bind_st *test_state = NULL;
+    ssh_bind bind = NULL;
+    int rc;
+
+    assert_non_null(state);
+    test_state = *((struct bind_st **)state);
+    assert_non_null(test_state);
+    assert_non_null(test_state->bind);
+    bind = test_state->bind;
+
+    rc = ssh_bind_config_parse_file(bind,
+                                    LIBSSH_TEST_BIND_CONFIG_MATCH_INCLUDED);
+    assert_int_equal(rc, 0);
+
+    assert_int_equal(bind->bindport, 2222);
+}
+
+/**
+ * @brief tests that a matching Match block in an included file applies to its
+ * own lines and ends with the file
+ */
+static void torture_bind_config_match_all_included(void **state)
+{
+    struct bind_st *test_state = NULL;
+    ssh_bind bind = NULL;
+    int previous_level, new_level;
+    int rc;
+
+    assert_non_null(state);
+    test_state = *((struct bind_st **)state);
+    assert_non_null(test_state);
+    assert_non_null(test_state->bind);
+    bind = test_state->bind;
+
+    previous_level = ssh_get_log_level();
+
+    rc = ssh_bind_config_parse_file(bind,
+                                    LIBSSH_TEST_BIND_CONFIG_MATCH_ALL_INCLUDED);
+    assert_int_equal(rc, 0);
+
+    new_level = ssh_get_log_level();
+    assert_int_equal(new_level, 1);
+    assert_int_equal(bind->bindport, 2222);
+
+    rc = ssh_set_log_level(previous_level);
+    assert_int_equal(rc, SSH_OK);
+}
+
 static void torture_bind_config_match_not_allowed(void **state)
 {
     struct bind_st *test_state;
@@ -1884,6 +1960,10 @@ int torture_run_tests(void)
         cmocka_unit_test_setup_teardown(torture_bind_config_match_twice,
                 sshbind_setup, sshbind_teardown),
         cmocka_unit_test_setup_teardown(torture_bind_config_match_unsupported,
+                sshbind_setup, sshbind_teardown),
+        cmocka_unit_test_setup_teardown(torture_bind_config_match_included,
+                sshbind_setup, sshbind_teardown),
+        cmocka_unit_test_setup_teardown(torture_bind_config_match_all_included,
                 sshbind_setup, sshbind_teardown),
         cmocka_unit_test_setup_teardown(torture_bind_config_match_not_allowed,
                 sshbind_setup, sshbind_teardown),

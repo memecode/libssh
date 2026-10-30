@@ -204,6 +204,9 @@ local_parse_file(ssh_bind bind,
     FILE *f = NULL;
     char line[MAX_LINE_SIZE] = {0};
     unsigned int count = 0;
+    /* A Match block in the included file ends with the file, as in OpenSSH,
+     * so the file gets its own copy of the parser flags. */
+    uint32_t file_flags = *parser_flags;
     int rv;
 
     if (depth > LIBSSH_BIND_CONF_MAX_DEPTH) {
@@ -225,7 +228,12 @@ local_parse_file(ssh_bind bind,
 
     while (fgets(line, sizeof(line), f)) {
         count++;
-        rv = ssh_bind_config_parse_line(bind, line, count, parser_flags, seen, depth);
+        rv = ssh_bind_config_parse_line(bind,
+                                        line,
+                                        count,
+                                        &file_flags,
+                                        seen,
+                                        depth);
         if (rv < 0) {
             fclose(f);
             return;
