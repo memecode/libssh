@@ -247,6 +247,9 @@ local_parse_file(ssh_session session,
     FILE *f = NULL;
     char line[MAX_LINE_SIZE] = {0};
     unsigned int count = 0;
+    /* A Host or Match block in the included file ends with the file, as in
+     * OpenSSH, so the file gets its own copy of the parsing state. */
+    int file_parsing = *parsing;
     int rv;
 
     if (depth > LIBSSH_CONF_MAX_DEPTH) {
@@ -267,7 +270,12 @@ local_parse_file(ssh_session session,
     SSH_LOG(SSH_LOG_PACKET, "Reading additional configuration data from %s", filename);
     while (fgets(line, sizeof(line), f)) {
         count++;
-        rv = ssh_config_parse_line(session, line, count, parsing, depth, global);
+        rv = ssh_config_parse_line(session,
+                                   line,
+                                   count,
+                                   &file_parsing,
+                                   depth,
+                                   global);
         if (rv < 0) {
             fclose(f);
             return;

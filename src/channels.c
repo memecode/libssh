@@ -1363,6 +1363,20 @@ void ssh_channel_do_free(ssh_channel channel)
         ssh_list_remove(session->channels, it);
     }
 
+    /* Drop queued requests that still point to this channel */
+    it = ssh_list_get_iterator(session->ssh_message_list);
+    while (it != NULL) {
+        struct ssh_iterator *next = it->next;
+        ssh_message msg = ssh_iterator_value(ssh_message, it);
+
+        if (msg->type == SSH_REQUEST_CHANNEL &&
+            msg->channel_request.channel == channel) {
+            ssh_list_remove(session->ssh_message_list, it);
+            SSH_MESSAGE_FREE(msg);
+        }
+        it = next;
+    }
+
     SSH_BUFFER_FREE(channel->stdout_buffer);
     SSH_BUFFER_FREE(channel->stderr_buffer);
 
